@@ -37,11 +37,14 @@ function validateOrderInput(req, res, next) {
     return res.status(400).json({ success: false, message: 'Missing required fields' });
   }
 
-  // Phone must be 10 digits
-  const phone = String(customerPhone).replace(/\D/g, '');
+  // Normalize phone — strip non-digits, remove leading 91 if 12 digits, must end up 10 digits
+  let phone = String(customerPhone).replace(/\D/g, '');
+  if (phone.length === 12 && phone.startsWith('91')) phone = phone.slice(2);
+  if (phone.length === 13 && phone.startsWith('091')) phone = phone.slice(3);
   if (phone.length !== 10) {
     return res.status(400).json({ success: false, message: 'Invalid phone number' });
   }
+  req.body.customerPhone = phone; // use normalized 10-digit value
 
   // orderId must be alphanumeric
   if (!/^[A-Za-z0-9\-_]+$/.test(String(orderId))) {
