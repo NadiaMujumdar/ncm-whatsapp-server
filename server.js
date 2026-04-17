@@ -3,8 +3,11 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const app = express();
-app.use(express.json());
-app.use(cors());
+app.use(express.json({ limit: '10kb' }));
+
+// Only allow requests from known origins (browser CORS)
+// Mobile apps bypass CORS but this blocks browser-based abuse
+app.use(cors({ origin: false }));
 
 const API_URL = `https://graph.facebook.com/v19.0/${process.env.PHONE_NUMBER_ID}/messages`;
 
@@ -13,6 +16,40 @@ const FIXED_NUMBERS = [
   process.env.FIXED_NUMBER_2,
   process.env.FIXED_NUMBER_3,
 ].filter(Boolean);
+
+// ─── API KEY MIDDLEWARE ───────────────────────────────────────────────────────
+// Every request to /order-confirmed must include the correct X-API-Key header.
+// This prevents anyone who discovers the URL from triggering WhatsApp spam.
+function requireApiKey(req, res, next) {
+  const key = req.headers['x-api-key'];
+  if (!key || key !== process.env.API_SECRET_KEY) {
+    console.warn(`❌ Unauthorized request from ${req.ip}`);
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+  next();
+}
+
+// ─── INPUT VALIDATION ─────────────────────────────────────────────────────────
+function validateOrderInput(req, res, next) {
+  const { customerName, customerPhone, orderId, totalAmount } = req.body;
+
+  if (!customerName || !customerPhone || !orderId || !totalAmount) {
+    return res.status(400).json({ success: false, message: 'Missing required fields' });
+  }
+
+  // Phone must be 10 digits
+  const phone = String(customerPhone).replace(/\D/g, '');
+  if (phone.length !== 10) {
+    return res.status(400).json({ success: false, message: 'Invalid phone number' });
+  }
+
+  // orderId must be alphanumeric
+  if (!/^[A-Za-z0-9\-_]+$/.test(String(orderId))) {
+    return res.status(400).json({ success: false, message: 'Invalid order ID' });
+  }
+
+  next();
+}
 
 async function sendWhatsApp(to, templateName, parameters) {
   try {
@@ -37,18 +74,15 @@ async function sendWhatsApp(to, templateName, parameters) {
     console.log(`✅ Sent to ${to}`);
     return { success: true, to };
   } catch (error) {
+    // Log full error server-side, return minimal info to client
     console.error(`❌ Failed ${to}:`, error.response?.data || error.message);
-    return { success: false, to, error: error.response?.data };
+    return { success: false, to };
   }
 }
 
-app.post('/order-confirmed', async (req, res) => {
+app.post('/order-confirmed', requireApiKey, validateOrderInput, async (req, res) => {
   const { customerName, customerPhone, orderId,
           totalAmount, itemsSummary, paymentMethod } = req.body;
-
-  if (!customerName || !customerPhone || !orderId || !totalAmount) {
-    return res.status(400).json({ success: false, message: "Missing fields" });
-  }
 
   const results = [];
 
@@ -73,13 +107,17 @@ app.post('/order-confirmed', async (req, res) => {
   res.json({
     success: results.every(r => r.success),
     messagesSent: results.filter(r => r.success).length,
-    total: results.length,
-    details: results
+    total: results.length
   });
 });
 
 app.get('/health', (req, res) => {
   res.json({ status: 'NCM WhatsApp Server running ✅' });
+});
+
+// Block all other routes
+app.use((req, res) => {
+  res.status(404).json({ message: 'Not found' });
 });
 
 app.listen(process.env.PORT || 3000, () => {
