@@ -73,7 +73,8 @@ app.post('/order-confirmed', async (req, res) => {
   res.json({
     success: results.every(r => r.success),
     messagesSent: results.filter(r => r.success).length,
-    total: results.length
+    total: results.length,
+    details: results
   });
 });
 
