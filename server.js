@@ -56,7 +56,7 @@ function validateOrderInput(req, res, next) {
 
 async function sendWhatsApp(to, templateName, parameters) {
   try {
-    await axios.post(API_URL, {
+    const response = await axios.post(API_URL, {
       messaging_product: "whatsapp",
       to: to,
       type: "template",
@@ -74,11 +74,14 @@ async function sendWhatsApp(to, templateName, parameters) {
         "Content-Type": "application/json"
       }
     });
-    console.log(`✅ Sent to ${to}`);
+    const msgId = response.data?.messages?.[0]?.id || 'no-id';
+    const msgStatus = response.data?.messages?.[0]?.message_status || 'unknown';
+    console.log(`✅ Sent to ${to} | msg_id: ${msgId} | status: ${msgStatus}`);
+    console.log(`   Full response: ${JSON.stringify(response.data)}`);
     return { success: true, to };
   } catch (error) {
     // Log full error server-side, return minimal info to client
-    console.error(`❌ Failed ${to}:`, error.response?.data || error.message);
+    console.error(`❌ Failed ${to}:`, JSON.stringify(error.response?.data) || error.message);
     return { success: false, to };
   }
 }
