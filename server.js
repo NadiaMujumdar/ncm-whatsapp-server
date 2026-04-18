@@ -4,12 +4,9 @@ const axios = require('axios');
 const cors = require('cors');
 const app = express();
 app.use(express.json({ limit: '10kb' }));
-
-// Only allow requests from known origins (browser CORS)
-// Mobile apps bypass CORS but this blocks browser-based abuse
 app.use(cors({ origin: false }));
 
-const API_URL = `https://graph.facebook.com/v25.0/${process.env.PHONE_NUMBER_ID}/messages`;
+const TWILIO_URL = `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Messages.json`;
 
 const FIXED_NUMBERS = [
   process.env.FIXED_NUMBER_1,
@@ -18,8 +15,6 @@ const FIXED_NUMBERS = [
 ].filter(Boolean);
 
 // ─── API KEY MIDDLEWARE ───────────────────────────────────────────────────────
-// Every request to /order-confirmed must include the correct X-API-Key header.
-// This prevents anyone who discovers the URL from triggering WhatsApp spam.
 function requireApiKey(req, res, next) {
   const key = req.headers['x-api-key'];
   if (!key || key !== process.env.API_SECRET_KEY) {
@@ -37,16 +32,14 @@ function validateOrderInput(req, res, next) {
     return res.status(400).json({ success: false, message: 'Missing required fields' });
   }
 
-  // Normalize phone — strip non-digits, remove leading 91 if 12 digits, must end up 10 digits
   let phone = String(customerPhone).replace(/\D/g, '');
   if (phone.length === 12 && phone.startsWith('91')) phone = phone.slice(2);
   if (phone.length === 13 && phone.startsWith('091')) phone = phone.slice(3);
   if (phone.length !== 10) {
     return res.status(400).json({ success: false, message: 'Invalid phone number' });
   }
-  req.body.customerPhone = phone; // use normalized 10-digit value
+  req.body.customerPhone = phone;
 
-  // orderId must be alphanumeric
   if (!/^[A-Za-z0-9\-_]+$/.test(String(orderId))) {
     return res.status(400).json({ success: false, message: 'Invalid order ID' });
   }
@@ -54,59 +47,79 @@ function validateOrderInput(req, res, next) {
   next();
 }
 
-async function sendWhatsApp(to, templateName, parameters) {
+// ─── TWILIO WHATSAPP SENDER ───────────────────────────────────────────────────
+async function sendWhatsApp(to, message) {
   try {
-    const response = await axios.post(API_URL, {
-      messaging_product: "whatsapp",
-      to: to,
-      type: "template",
-      template: {
-        name: templateName,
-        language: { code: "en" },
-        components: [{
-          type: "body",
-          parameters: parameters.map(p => ({ type: "text", text: String(p) }))
-        }]
-      }
-    }, {
-      headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
-        "Content-Type": "application/json"
-      }
+    const params = new URLSearchParams();
+    params.append('From', `whatsapp:${process.env.TWILIO_WHATSAPP_FROM}`);
+    params.append('To',   `whatsapp:+${to}`);
+    params.append('Body', message);
+
+    const response = await axios.post(TWILIO_URL, params, {
+      auth: {
+        username: process.env.TWILIO_ACCOUNT_SID,
+        password: process.env.TWILIO_AUTH_TOKEN
+      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
-    const msgId = response.data?.messages?.[0]?.id || 'no-id';
-    const msgStatus = response.data?.messages?.[0]?.message_status || 'unknown';
-    console.log(`✅ Sent to ${to} | msg_id: ${msgId} | status: ${msgStatus}`);
-    console.log(`   Full response: ${JSON.stringify(response.data)}`);
+
+    console.log(`✅ Sent to ${to} | sid: ${response.data.sid} | status: ${response.data.status}`);
     return { success: true, to };
   } catch (error) {
-    // Log full error server-side, return minimal info to client
     console.error(`❌ Failed ${to}:`, JSON.stringify(error.response?.data) || error.message);
     return { success: false, to };
   }
 }
 
+// ─── MESSAGE BUILDERS ─────────────────────────────────────────────────────────
+function customerMessage(customerName, orderId, itemsSummary, totalAmount, paymentMethod) {
+  return `Hello ${customerName},
+
+✅ Your order has been confirmed!
+
+🧾 Order ID     : ${orderId}
+📦 Items        : ${itemsSummary}
+💰 Amount Paid  : ₹${totalAmount}
+💳 Payment Via  : ${paymentMethod}
+
+Thank you for choosing NCM Spare Parts. We will notify you once your order is ready for dispatch.
+
+For queries, reply to this message.`;
+}
+
+function staffMessage(orderId, customerName, customerPhone, itemsSummary, totalAmount, paymentMethod) {
+  return `🔔 New Order — NCM Spare Parts
+
+📋 Order ID  : ${orderId}
+👤 Customer  : ${customerName}
+📞 Phone     : ${customerPhone}
+📦 Items     : ${itemsSummary}
+💰 Amount    : ₹${totalAmount}
+💳 Payment   : ${paymentMethod}
+
+Please process this order at the earliest.`;
+}
+
+// ─── ORDER CONFIRMED ENDPOINT ─────────────────────────────────────────────────
 app.post('/order-confirmed', requireApiKey, validateOrderInput, async (req, res) => {
   const { customerName, customerPhone, orderId,
           totalAmount, itemsSummary, paymentMethod } = req.body;
 
   const results = [];
 
-  // Template 1 → Customer
+  // Message 1 → Customer
   results.push(await sendWhatsApp(
     `91${customerPhone}`,
-    process.env.ORDER_TEMPLATE_NAME,
-    [customerName, orderId, itemsSummary || 'Spare Parts',
-     totalAmount, paymentMethod || 'Online']
+    customerMessage(customerName, orderId,
+      itemsSummary || 'Spare Parts', totalAmount, paymentMethod || 'Online')
   ));
 
-  // Template 2 → 3 Staff numbers
+  // Message 2 → 3 Staff numbers
   for (const number of FIXED_NUMBERS) {
     results.push(await sendWhatsApp(
       number,
-      process.env.INTERNAL_TEMPLATE_NAME,
-      [orderId, customerName, customerPhone,
-       itemsSummary || 'Spare Parts', totalAmount, paymentMethod || 'Online']
+      staffMessage(orderId, customerName, customerPhone,
+        itemsSummary || 'Spare Parts', totalAmount, paymentMethod || 'Online')
     ));
   }
 
@@ -118,53 +131,7 @@ app.post('/order-confirmed', requireApiKey, validateOrderInput, async (req, res)
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'NCM WhatsApp Server running ✅' });
-});
-
-// ─── WEBHOOK VERIFICATION (Meta GET challenge) ────────────────────────────────
-app.get('/webhook', (req, res) => {
-  const mode      = req.query['hub.mode'];
-  const token     = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === process.env.WEBHOOK_VERIFY_TOKEN) {
-    console.log('✅ Webhook verified by Meta');
-    return res.status(200).send(challenge);
-  }
-  console.warn('❌ Webhook verification failed');
-  res.sendStatus(403);
-});
-
-// ─── WEBHOOK EVENTS (Meta POST — delivery receipts & inbound messages) ────────
-app.post('/webhook', (req, res) => {
-  const body = req.body;
-  if (body.object !== 'whatsapp_business_account') return res.sendStatus(404);
-
-  const entries = body.entry || [];
-  for (const entry of entries) {
-    for (const change of (entry.changes || [])) {
-      const value = change.value || {};
-
-      // Delivery / read status updates
-      for (const status of (value.statuses || [])) {
-        const { id, status: st, timestamp, recipient_id, errors } = status;
-        if (errors && errors.length) {
-          console.error(`❌ Delivery FAILED to ${recipient_id} | msg: ${id} | ${JSON.stringify(errors)}`);
-        } else {
-          console.log(`📬 msg ${id} → ${recipient_id} : ${st} at ${timestamp}`);
-        }
-      }
-
-      // Inbound messages (customers replying)
-      for (const msg of (value.messages || [])) {
-        const from = msg.from;
-        const text = msg.text?.body || `[${msg.type}]`;
-        console.log(`📨 Inbound from ${from}: ${text}`);
-      }
-    }
-  }
-
-  res.sendStatus(200);
+  res.json({ status: 'NCM WhatsApp Server running ✅', provider: 'Twilio' });
 });
 
 // Block all other routes
