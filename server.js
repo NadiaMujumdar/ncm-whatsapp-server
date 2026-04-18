@@ -9,7 +9,7 @@ app.use(express.json({ limit: '10kb' }));
 // Mobile apps bypass CORS but this blocks browser-based abuse
 app.use(cors({ origin: false }));
 
-const API_URL = `https://graph.facebook.com/v19.0/${process.env.PHONE_NUMBER_ID}/messages`;
+const API_URL = `https://graph.facebook.com/v25.0/${process.env.PHONE_NUMBER_ID}/messages`;
 
 const FIXED_NUMBERS = [
   process.env.FIXED_NUMBER_1,
@@ -119,6 +119,52 @@ app.post('/order-confirmed', requireApiKey, validateOrderInput, async (req, res)
 
 app.get('/health', (req, res) => {
   res.json({ status: 'NCM WhatsApp Server running ✅' });
+});
+
+// ─── WEBHOOK VERIFICATION (Meta GET challenge) ────────────────────────────────
+app.get('/webhook', (req, res) => {
+  const mode      = req.query['hub.mode'];
+  const token     = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token === process.env.WEBHOOK_VERIFY_TOKEN) {
+    console.log('✅ Webhook verified by Meta');
+    return res.status(200).send(challenge);
+  }
+  console.warn('❌ Webhook verification failed');
+  res.sendStatus(403);
+});
+
+// ─── WEBHOOK EVENTS (Meta POST — delivery receipts & inbound messages) ────────
+app.post('/webhook', (req, res) => {
+  const body = req.body;
+  if (body.object !== 'whatsapp_business_account') return res.sendStatus(404);
+
+  const entries = body.entry || [];
+  for (const entry of entries) {
+    for (const change of (entry.changes || [])) {
+      const value = change.value || {};
+
+      // Delivery / read status updates
+      for (const status of (value.statuses || [])) {
+        const { id, status: st, timestamp, recipient_id, errors } = status;
+        if (errors && errors.length) {
+          console.error(`❌ Delivery FAILED to ${recipient_id} | msg: ${id} | ${JSON.stringify(errors)}`);
+        } else {
+          console.log(`📬 msg ${id} → ${recipient_id} : ${st} at ${timestamp}`);
+        }
+      }
+
+      // Inbound messages (customers replying)
+      for (const msg of (value.messages || [])) {
+        const from = msg.from;
+        const text = msg.text?.body || `[${msg.type}]`;
+        console.log(`📨 Inbound from ${from}: ${text}`);
+      }
+    }
+  }
+
+  res.sendStatus(200);
 });
 
 // Block all other routes
