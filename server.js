@@ -66,8 +66,13 @@ async function sendWhatsApp(to, message) {
     console.log(`✅ Sent to ${to} | sid: ${response.data.sid} | status: ${response.data.status}`);
     return { success: true, to };
   } catch (error) {
-    console.error(`❌ Failed ${to}:`, JSON.stringify(error.response?.data) || error.message);
-    return { success: false, to };
+    const twilioError = error.response?.data;
+    console.error(`❌ Failed ${to}:`, JSON.stringify(twilioError) || error.message);
+    if (twilioError?.code) {
+      console.error(`   Twilio code ${twilioError.code}: ${twilioError.message}`);
+      console.error(`   More info: ${twilioError.more_info}`);
+    }
+    return { success: false, to, error: twilioError?.message || error.message };
   }
 }
 
@@ -82,9 +87,7 @@ function customerMessage(customerName, orderId, itemsSummary, totalAmount, payme
 💰 Amount Paid  : ₹${totalAmount}
 💳 Payment Via  : ${paymentMethod}
 
-Thank you for choosing NCM Spare Parts. We will notify you once your order is ready for dispatch.
-
-For queries, reply to this message.`;
+Thank you for choosing NCM Spare Parts. We will notify you once your order is dispatched.`;
 }
 
 function staffMessage(orderId, customerName, customerPhone, itemsSummary, totalAmount, paymentMethod) {
@@ -123,10 +126,14 @@ app.post('/order-confirmed', requireApiKey, validateOrderInput, async (req, res)
     ));
   }
 
+  const failures = results.filter(r => !r.success);
   res.json({
     success: results.every(r => r.success),
     messagesSent: results.filter(r => r.success).length,
-    total: results.length
+    total: results.length,
+    ...(failures.length > 0 && {
+      errors: failures.map(r => ({ to: r.to, error: r.error }))
+    })
   });
 });
 
