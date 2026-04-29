@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json({ limit: '10kb' }));
 app.use(cors({ origin: false }));
 
-const META_API_URL = `https://graph.facebook.com/v19.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+const META_API_URL = `https://graph.facebook.com/v25.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
 const FIXED_NUMBERS = [
   process.env.FIXED_NUMBER_1,
@@ -63,7 +63,7 @@ async function sendWhatsApp(to, template, parameters) {
         type: 'template',
         template: {
           name: template,
-          language: { code: 'en' },
+          language: { code: 'en_US' },
           components: [
             {
               type: 'body',
