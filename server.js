@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json({ limit: '10kb' }));
 app.use(cors({ origin: false }));
 
-const TWILIO_URL = `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Messages.json`;
+const META_API_URL = `https://graph.facebook.com/v19.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
 const FIXED_NUMBERS = [
   process.env.FIXED_NUMBER_1,
@@ -48,60 +48,46 @@ function validateOrderInput(req, res, next) {
   next();
 }
 
-// ─── TWILIO WHATSAPP SENDER ───────────────────────────────────────────────────
-async function sendWhatsApp(to, message) {
+// ─── META WHATSAPP SENDER ─────────────────────────────────────────────────────
+// Sends a pre-approved template message via Meta Cloud API.
+// `to`         — phone in E.164 without '+' (e.g. "919876543210")
+// `template`   — template name string
+// `parameters` — array of { type: "text", text: "value" } in template slot order
+async function sendWhatsApp(to, template, parameters) {
   try {
-    const params = new URLSearchParams();
-    params.append('From', `whatsapp:${process.env.TWILIO_WHATSAPP_FROM}`);
-    params.append('To',   `whatsapp:+${to}`);
-    params.append('Body', message);
-
-    const response = await axios.post(TWILIO_URL, params, {
-      auth: {
-        username: process.env.TWILIO_ACCOUNT_SID,
-        password: process.env.TWILIO_AUTH_TOKEN
+    const response = await axios.post(
+      META_API_URL,
+      {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'template',
+        template: {
+          name: template,
+          language: { code: 'en' },
+          components: [
+            {
+              type: 'body',
+              parameters,
+            },
+          ],
+        },
       },
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    });
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
 
-    console.log(`✅ Sent to ${to} | sid: ${response.data.sid} | status: ${response.data.status}`);
+    const msgId = response.data?.messages?.[0]?.id;
+    console.log(`✅ Sent to ${to} | template: ${template} | id: ${msgId}`);
     return { success: true, to };
   } catch (error) {
-    const twilioError = error.response?.data;
-    console.error(`❌ Failed ${to}:`, JSON.stringify(twilioError) || error.message);
-    if (twilioError?.code) {
-      console.error(`   Twilio code ${twilioError.code}: ${twilioError.message}`);
-      console.error(`   More info: ${twilioError.more_info}`);
-    }
-    return { success: false, to, error: twilioError?.message || error.message };
+    const metaError = error.response?.data?.error;
+    console.error(`❌ Failed ${to}:`, JSON.stringify(metaError) || error.message);
+    return { success: false, to, error: metaError?.message || error.message };
   }
-}
-
-// ─── MESSAGE BUILDERS ─────────────────────────────────────────────────────────
-function customerMessage(customerName, orderId, itemsSummary, totalAmount, paymentMethod) {
-  return `Hello ${customerName},
-
-✅ Your order has been confirmed!
-
-🧾 Order ID     : ${orderId}
-📦 Items        : ${itemsSummary}
-💰 Amount Paid  : ₹${totalAmount}
-💳 Payment Via  : ${paymentMethod}
-
-Thank you for choosing NCM Spare Parts. We will notify you once your order is dispatched.`;
-}
-
-function staffMessage(orderId, customerName, customerPhone, itemsSummary, totalAmount, paymentMethod) {
-  return `🔔 New Order — NCM Spare Parts
-
-📋 Order ID  : ${orderId}
-👤 Customer  : ${customerName}
-📞 Phone     : ${customerPhone}
-📦 Items     : ${itemsSummary}
-💰 Amount    : ₹${totalAmount}
-💳 Payment   : ${paymentMethod}
-
-Please process this order at the earliest.`;
 }
 
 // ─── ORDER CONFIRMED ENDPOINT ─────────────────────────────────────────────────
@@ -109,21 +95,43 @@ app.post('/order-confirmed', requireApiKey, validateOrderInput, async (req, res)
   const { customerName, customerPhone, orderId,
           totalAmount, itemsSummary, paymentMethod } = req.body;
 
+  const items   = itemsSummary  || 'Spare Parts';
+  const payment = paymentMethod || 'Online';
+
   const results = [];
 
-  // Message 1 → Customer
+  // Message 1 → Customer (template: template_1__for_customer)
+  // Slots: {{1}} Order Status, {{2}} Customer Name, {{3}} Order ID,
+  //        {{4}} Items Summary, {{5}} Total Amount, {{6}} Payment Method
   results.push(await sendWhatsApp(
     `91${customerPhone}`,
-    customerMessage(customerName, orderId,
-      itemsSummary || 'Spare Parts', totalAmount, paymentMethod || 'Online')
+    'template_1__for_customer',
+    [
+      { type: 'text', text: 'Confirmed' },
+      { type: 'text', text: customerName },
+      { type: 'text', text: orderId },
+      { type: 'text', text: items },
+      { type: 'text', text: String(totalAmount) },
+      { type: 'text', text: payment },
+    ]
   ));
 
-  // Message 2 → 3 Staff numbers
+  // Message 2 → Staff numbers (template: internal_order_alert)
+  // Slots: {{1}} Order Status, {{2}} Order ID, {{3}} Customer Name,
+  //        {{4}} Customer Phone, {{5}} Items Summary, {{6}} Total Amount, {{7}} Payment Method
   for (const number of FIXED_NUMBERS) {
     results.push(await sendWhatsApp(
       number,
-      staffMessage(orderId, customerName, customerPhone,
-        itemsSummary || 'Spare Parts', totalAmount, paymentMethod || 'Online')
+      'internal_order_alert',
+      [
+        { type: 'text', text: 'New Order' },
+        { type: 'text', text: orderId },
+        { type: 'text', text: customerName },
+        { type: 'text', text: customerPhone },
+        { type: 'text', text: items },
+        { type: 'text', text: String(totalAmount) },
+        { type: 'text', text: payment },
+      ]
     ));
   }
 
@@ -233,7 +241,7 @@ app.post('/send-dispatch-email', requireApiKey, async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'NCM WhatsApp Server running ✅', provider: 'Twilio' });
+  res.json({ status: 'NCM WhatsApp Server running ✅', provider: 'Meta Cloud API' });
 });
 
 // Block all other routes
