@@ -101,13 +101,13 @@ app.post('/order-confirmed', requireApiKey, validateOrderInput, async (req, res)
   const results = [];
 
   // Message 1 → Customer (template: template_1__for_customer)
-  // Slots: {{1}} Order Status, {{2}} Customer Name, {{3}} Order ID,
-  //        {{4}} Items Summary, {{5}} Total Amount, {{6}} Payment Method
+  // Slots: {{1}} Customer Name, {{2}} Order ID,
+  //        {{3}} Items Summary, {{4}} Total Amount, {{5}} Payment Method
+  // Note: "Status: {{Order Status}}" is literal text in the template, not a variable
   results.push(await sendWhatsApp(
     `91${customerPhone}`,
     'template_1__for_customer',
     [
-      { type: 'text', text: 'Confirmed' },
       { type: 'text', text: customerName },
       { type: 'text', text: orderId },
       { type: 'text', text: items },
@@ -117,14 +117,14 @@ app.post('/order-confirmed', requireApiKey, validateOrderInput, async (req, res)
   ));
 
   // Message 2 → Staff numbers (template: internal_order_alert)
-  // Slots: {{1}} Order Status, {{2}} Order ID, {{3}} Customer Name,
-  //        {{4}} Customer Phone, {{5}} Items Summary, {{6}} Total Amount, {{7}} Payment Method
+  // Slots: {{1}} Order ID, {{2}} Customer Name,
+  //        {{3}} Customer Phone, {{4}} Items Summary, {{5}} Total Amount, {{6}} Payment Method
+  // Note: "Status: {{Order Status}}" is literal text in the template, not a variable
   for (const number of FIXED_NUMBERS) {
     results.push(await sendWhatsApp(
       number,
       'internal_order_alert',
       [
-        { type: 'text', text: 'New Order' },
         { type: 'text', text: orderId },
         { type: 'text', text: customerName },
         { type: 'text', text: customerPhone },
