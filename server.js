@@ -63,7 +63,7 @@ async function sendWhatsApp(to, template, parameters) {
         type: 'template',
         template: {
           name: template,
-          language: { code: 'en_US' },
+          language: { code: 'en' },
           components: [
             {
               type: 'body',
