@@ -155,7 +155,7 @@ const gmailTransporter = nodemailer.createTransport({
   },
 });
 
-// ─── DISPATCH EMAIL ENDPOINT ─────────────────────────────────────────────────
+// ─── DISPATCH EMAIL + WHATSAPP ENDPOINT ──────────────────────────────────────
 app.post('/send-dispatch-email', requireApiKey, async (req, res) => {
   const {
     orderId, customerName, machineNumber, model, place,
@@ -165,6 +165,27 @@ app.post('/send-dispatch-email', requireApiKey, async (req, res) => {
 
   if (!orderId || !awbNumber) {
     return res.status(400).json({ success: false, message: 'orderId and awbNumber are required' });
+  }
+
+  // ── WhatsApp dispatch notification to customer ──
+  // Template: order_dispatched
+  // {{1}} customerName, {{2}} machineNumber, {{3}} orderId,
+  // {{4}} transporterAgency, {{5}} awbNumber, {{6}} address
+  if (phone) {
+    let cleanPhone = phone.replace(/\D/g, '');
+    if (cleanPhone.length === 10) cleanPhone = `91${cleanPhone}`;
+    await sendWhatsApp(
+      cleanPhone,
+      'order_dispatched',
+      [
+        { type: 'text', text: customerName  || 'Customer' },
+        { type: 'text', text: machineNumber || '-' },
+        { type: 'text', text: orderId },
+        { type: 'text', text: transporterAgency || '-' },
+        { type: 'text', text: awbNumber },
+        { type: 'text', text: address || '-' },
+      ]
+    ).catch(e => console.error('Dispatch WhatsApp failed:', e.message));
   }
 
   const recipients = (process.env.DISPATCH_EMAIL_TO || '').split(',').map(e => e.trim()).filter(Boolean);
