@@ -244,6 +244,43 @@ app.get('/health', (req, res) => {
   res.json({ status: 'NCM WhatsApp Server running ✅', provider: 'Meta Cloud API' });
 });
 
+// ─── META WEBHOOK (delivery status callbacks) ─────────────────────────────────
+// GET: Meta verification challenge
+app.get('/webhook', (req, res) => {
+  const mode      = req.query['hub.mode'];
+  const token     = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token === process.env.WEBHOOK_VERIFY_TOKEN) {
+    console.log('✅ Webhook verified by Meta');
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
+});
+
+// POST: delivery status updates from Meta
+app.post('/webhook', (req, res) => {
+  const body = req.body;
+  try {
+    const entries = body?.entry || [];
+    for (const entry of entries) {
+      const changes = entry?.changes || [];
+      for (const change of changes) {
+        const statuses = change?.value?.statuses || [];
+        for (const s of statuses) {
+          console.log(`📬 Message ${s.id} → status: ${s.status} | to: ${s.recipient_id} | ts: ${new Date(s.timestamp * 1000).toISOString()}`);
+          if (s.errors?.length) {
+            console.error(`   ❌ Error: ${JSON.stringify(s.errors)}`);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Webhook parse error:', e.message);
+  }
+  res.sendStatus(200);
+});
+
 // Block all other routes
 app.use((req, res) => {
   res.status(404).json({ message: 'Not found' });
