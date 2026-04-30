@@ -5,7 +5,7 @@ const cors = require('cors');
 const nodemailer = require('nodemailer');
 const app = express();
 app.use(express.json({ limit: '10kb' }));
-app.use(cors({ origin: false }));
+app.use(cors({ origin: ['https://ncm-parts.web.app', 'http://localhost:5000', 'http://127.0.0.1:5000'] }));
 
 const META_API_URL = `https://graph.facebook.com/v25.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
