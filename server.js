@@ -148,11 +148,16 @@ app.post('/order-confirmed', requireApiKey, validateOrderInput, async (req, res)
 
 // ─── GMAIL TRANSPORTER ───────────────────────────────────────────────────────
 const gmailTransporter = nodemailer.createTransport({
-  service: 'gmail',
+  host:   'smtp.gmail.com',
+  port:   465,
+  secure: true,
   auth: {
     user: process.env.GMAIL_USER,
     pass: process.env.GMAIL_APP_PASSWORD,
   },
+  connectionTimeout: 15000,
+  greetingTimeout:   10000,
+  socketTimeout:     15000,
 });
 
 // ─── DISPATCH EMAIL + WHATSAPP ENDPOINT ──────────────────────────────────────
